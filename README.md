@@ -98,8 +98,8 @@ The following properties are covered by the test suite, not only stated:
 ## Installation
 
 ```bash
-git clone https://github.com/<OWNER>/<REPO>.git
-cd <REPO>
+git clone https://github.com/salb/civica.git
+cd civica
 python -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 python -m pip install -e ".[test]"
