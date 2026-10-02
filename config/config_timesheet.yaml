@@ -1,0 +1,147 @@
+# config_timesheet.yaml
+# Workflow configuration for timesheet compilation (compilazione_timesheet).
+# Supports multi-period entries and iterative text enrichment.
+# Prompt templates are kept in Italian as a localisation example.
+
+initial_state:
+  collected_data: {}
+  current_phase: 'data_extraction'
+  user_request: null
+  request_type: 'compilazione_timesheet'
+
+settings:
+  max_cycles: 15
+  max_parallel_agents: 1
+
+validation_schemas:
+  compilazione_timesheet:
+    nome_richiedente: { required: true, question: "Per chi stai compilando questo timesheet?", normalization: 'titlecase' }
+    progetto: { required: true, question: "A quale progetto si riferisce il timesheet?", normalization: 'uppercase' }
+    periodi: { required: true, question: "Quali sono i periodi e le attività da registrare?" }
+
+output_templates:
+  timesheet_entry:
+    richiedente: "{nome_richiedente}"
+    progetto_timesheet: "{progetto}"
+    periodo_dal: "{data_inizio}"
+    periodo_al: "{data_fine}"
+    attivita_svolta: "{descrizione_attivita}"
+
+prompt_templates:
+  estrazione_dati_timesheet: |
+    Sei un assistente AI. Analizza il testo per identificare il richiedente, il progetto e uno o più periodi di lavoro.
+    Restituisci un JSON con le chiavi di primo livello "progetto" e "nome_richiedente", e una chiave "periodi" che è una LISTA di oggetti.
+    Ogni oggetto nella lista deve contenere "data_inizio", "data_fine" e "descrizione_attivita".
+
+    REGOLA IMPORTANTE: Se nel testo non sono specificate date o periodi di lavoro, il valore della chiave "periodi" DEVE essere `null`, non una lista vuota [].
+
+    Esempio 1 (con date):
+    - Testo: "Sono Mario Rossi, timesheet per progetto X, dal 1 al 2 marzo 2026 analisi dati."
+    - JSON: { "nome_richiedente": "Mario Rossi", "progetto": "X", "periodi": [ { "data_inizio": "2026-03-01", "data_fine": "2026-03-02", "descrizione_attivita": "analisi dati" } ] }
+
+    Esempio 2 (senza date):
+    - Testo: "timesheet per progetto Y"
+    - JSON: { "nome_richiedente": null, "progetto": "Y", "periodi": null }
+    ---
+    CONTESTO: Data odierna: {data_odierna}. Usala per risolvere le date relative ("ieri", "la settimana scorsa") e per l'anno quando il testo non lo indica.
+    Testo da analizzare: "{richiesta_utente}"
+
+  # Key 'arricchimento_testo_formale' is hardcoded in IterativeEnrichmentAgent
+  # and must not be renamed.
+  arricchimento_testo_formale: |
+    Sei un project manager senior dell'Istituto Nazionale di Geofisica e Vulcanologia (INGV).
+    Il tuo compito è prendere la seguente descrizione di un'attività da un timesheet e riscriverla in modo formale e professionale, come se dovessi presentarla in un report di progetto.
+    TESTO ORIGINALE INSERITO NEL TIMESHEET:
+    "{testo_originale}"
+    ---
+    RISPONDI SOLO ED ESCLUSIVAMENTE CON LA DESCRIZIONE FORMALE DELL'ATTIVITÀ.
+
+  strutturazione_integrazioni_task: |
+    Sei un assistente AI. L'utente ha appena fornito queste informazioni integrative per un timesheet:
+    {risposte_grezze}
+
+    Il tuo compito è convertire questo testo in un JSON strutturato. 
+    REGOLA FONDAMENTALE: Se il testo descrive i "periodi" o le date di lavoro, devi obbligatoriamente creare la chiave "periodi" formattandola come una LISTA di oggetti. 
+    Ogni oggetto della lista deve avere ESATTAMENTE: "data_inizio" (YYYY-MM-DD), "data_fine" (YYYY-MM-DD) e "descrizione_attivita".
+    Restituisci SOLO le chiavi e i dati presenti nel testo, senza generare campi null per i dati non menzionati.
+
+router:
+  - agent: data_extractor_agent
+    activate_if: [{field: state.current_phase, value: 'data_extraction'}]
+    task:
+      template: estrazione_dati_timesheet
+      parameters:
+        richiesta_utente: state.user_request
+        data_odierna: state.current_date
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'data_validation'}}
+
+  - agent: formal_validator_agent
+    activate_if: [{field: state.current_phase, value: 'data_validation'}]
+    task: "compilazione_timesheet"
+    update_state:
+      - if: [{field: output.success, operator: equals, value: false}]
+        then:
+          - {assign: {to: state.pending_questions, from: output.pending_questions}}
+          - {assign: {to: state.current_phase, value: 'clarification_request'}}
+        else:
+          - {assign: {to: state.current_phase, value: 'data_enrichment'}}
+
+  - agent: human_input_agent
+    activate_if: [{field: state.current_phase, value: 'clarification_request'}]
+    task: "ask_from_state"
+    update_state:
+      # Raw answers are staged in a temporary area rather than written
+      # directly to collected_data, to avoid overwriting already-extracted
+      # fields. A second extractor pass structures them before merging.
+      - {assign: {to: state.temp_input, from: output}}
+      - {assign: {to: state.pending_questions, value: []}}
+      - {assign: {to: state.current_phase, value: 'human_input_structuring'}}
+
+  - agent: data_extractor_agent
+    activate_if: [{field: state.current_phase, value: 'human_input_structuring'}]
+    task:
+      template: strutturazione_integrazioni_task
+      parameters:
+        risposte_grezze:
+          path: state.temp_input
+          format: json_string
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'data_normalization'}}
+
+  - agent: data_normalizer_agent
+    activate_if: [{field: state.current_phase, value: 'data_normalization'}]
+    task: "default"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'data_validation'}}
+
+  - agent: iterative_enrichment_agent
+    activate_if: [{field: state.current_phase, value: 'data_enrichment'}]
+    # Pipe-delimited task: list_key|text_key|doc_type|field_name.
+    # Domain keys (periodi, descrizione_attivita) are kept in Italian to match
+    # the field names produced by the extraction prompt.
+    task: "periodi|descrizione_attivita|Registrazione Timesheet|Attività Svolta"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'compilation_preparation'}}
+
+  - agent: data_normalizer_agent
+    activate_if: [{field: state.current_phase, value: 'compilation_preparation'}]
+    task: "default"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      # Load the output template into the dynamic state key expected by
+      # IterativeCompilerAgent: current_output_schema.
+      - {assign: {to: state.current_output_schema, from: state.output_templates.timesheet_entry}}
+      - {assign: {to: state.current_phase, value: 'final_compilation'}}
+
+  - agent: iterative_compiler_agent
+    activate_if: [{field: state.current_phase, value: 'final_compilation'}]
+    # Task is the collected_data key holding the list to iterate over.
+    task: "periodi"
+    update_state:
+      - {assign: {to: state.final_output, from: output}}
+      - {assign: {to: state.current_phase, value: 'completed'}}

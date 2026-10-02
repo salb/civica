@@ -1,0 +1,202 @@
+# ===================================================================
+# config_review_support.yaml
+# Workflow configuration for "Peer Review Support Assistant".
+# Takes a review file and a draft file as input; produces a structured
+# point-by-point response document ready for submission.
+# Prompt templates are kept in Italian as a localisation example.
+# ===================================================================
+
+initial_state:
+  # Data is loaded from files; no pre-populated fields needed here.
+  collected_data: {}
+  current_phase: 'file_reading'
+  final_output: null
+  error: null
+
+settings:
+  max_cycles: 10
+  max_parallel_agents: 1
+
+# -- FINAL OUTPUT TEMPLATE --
+output_templates:
+  risposta_peer_review_md: |
+    Dear Editor,
+
+    We thank you and the reviewers for the constructive and insightful comments on our manuscript. We have carefully addressed all the points raised, and we believe the manuscript has been significantly improved as a result.
+
+    Below is a point-by-point response to the reviewers' comments.
+
+    ---
+
+    {lista_risposte_formattate}
+    ---
+
+    We look forward to hearing from you regarding our revised manuscript.
+
+    Sincerely,
+
+    The Authors
+
+# -- PROMPT TEMPLATES FOR AI AGENTS --
+prompt_templates:
+
+  # 1. Prompt for ReviewParserAgent
+  parse_review_task: |
+    Sei un assistente AI specializzato nell'analisi di documenti accademici in formato Markdown.
+    Il tuo compito è analizzare il testo di una peer review (che può essere una review reale di più revisori o un report editoriale aggregato) ed estrarre OGNI singolo commento azionabile in una lista JSON.
+    
+    REGOLE:
+    - La tua risposta DEVE essere un singolo oggetto JSON.
+    - L'oggetto JSON deve contenere una sola chiave: "commenti_revisori".
+    - Il valore di "commenti_revisori" deve essere una LISTA di oggetti.
+    - Ogni oggetto nella lista deve avere le chiavi: 
+      - "revisore": Indica l'autore o la provenienza del commento. Se il testo cita esplicitamente un revisore (es. "Revisore 1", "Reviewer 2"), inserisci quel numero/nome. Se il documento è un report diviso per aree tematiche (es. "Questioni Critiche", "Miglioramenti Raccomandati"), usa il nome della sezione come provenienza (es. "Editor - Questioni Critiche").
+      - "id": Un numero progressivo indipendente per ciascun "revisore" o "sezione".
+      - "testo": Il testo completo del commento, senza il trattino o numero iniziale.
+    - Ignora le sezioni puramente riassuntive o di giudizio generale ed estrai solo i punti specifici da affrontare.
+
+    Esempio di output se ricevi una review tradizionale:
+    {
+      "commenti_revisori": [
+        { "revisore": "1", "id": 1, "testo": "Metodologia: Mancanza di discussione sulla risoluzione..." }
+      ]
+    }
+    Esempio di output se ricevi un report editoriale/simulato:
+    {
+      "commenti_revisori": [
+        { "revisore": "Editor - Questioni Critiche", "id": 1, "testo": "Chiarire la natura del contributo: il manoscritto deve scegliere..." }
+      ]
+    }
+    ---
+    Testo della Peer Review da analizzare:
+    "{testo_review_originale}"
+
+  # 2. Prompt for CritiqueCategoriserAgent
+  categorize_critic_task: |
+    Sei un ricercatore esperto. Analizza la seguente critica tratta da una peer review e classificala in UNA delle seguenti categorie:
+    - 'Critica Metodologica': Riguarda problemi con il metodo, l'analisi statistica, il disegno sperimentale.
+    - 'Richiesta di Chiarimento': Il revisore chiede di spiegare meglio un punto, aggiungere dettagli o definizioni.
+    - 'Suggerimento Migliorativo': Il revisore propone un'aggiunta (es. una citazione, un'analisi supplementare) che non invalida il lavoro attuale.
+    - 'Errore Minore': Riguarda typo, errori grammaticali, etichette sbagliate nei grafici, riferimenti formattati male.
+    - 'Apprezzamento': Commento positivo o di lode.
+
+    Rispondi con un singolo oggetto JSON contenente la chiave "categoria".
+    ---
+    Critica da classificare:
+    "{testo_commento}"
+
+  # 3. Prompt for ResponseStrategistAgent (instructions only — data injected via user_prompt)
+  strategy_response_task_contextual: |
+    Sei un ricercatore senior e diplomatico che aiuta un collega a preparare risposte strategiche ai revisori. Il tuo compito è generare una bozza di risposta **MIRATA** a una specifica critica, basata esclusivamente sul draft fornito.
+
+    ## **PRINCIPI STRATEGICI**
+
+    ### **1. PRINCIPIO DI MINIMA AZIONE**
+    - Suggerisci SOLO modifiche strettamente necessarie per rispondere alla critica specifica
+    - Non proporre miglioramenti aggiuntivi non richiesti
+    - Se il punto è già chiaro nel testo, limitati a indicare dove si trova
+
+    ### **2. TIPOLOGIA E PRIORITIZZAZIONE**
+    **Critiche MAJOR** (metodologia, risultati, conclusioni):
+    - Sii più assertivo se il revisore ha frainteso
+    - Proponi modifiche sostanziali se necessario
+
+    **Critiche MINOR** (chiarezza, referenze, dettagli):
+    - Sii più accomodante
+    - Suggerisci aggiunte brevi e mirate
+
+    **Critiche di FRAINTENDIMENTO**:
+    - Indica gentilmente dove l'informazione è già presente
+    - Suggerisci solo piccole riformulazioni per chiarezza
+
+    ## **STILE E TONO**
+
+    ### **SEMPRE:**
+    - Inizia ringraziando il revisore
+    - Usa frasi come: "Potremmo chiarire che...", "Suggeriamo di precisare...", "Una risposta concisa potrebbe essere..."
+    - Mantieni tono professionale ma umile
+
+    ### **MAI:**
+    - Linguaggio difensivo o supponente
+    - Elaborazioni non necessarie
+    - Invenzione di dati o risultati
+
+    ### **ESEMPI DI FRASI EFFICACI:**
+    ✅ "Grazie per questa osservazione. Il punto è trattato nella sezione X, ma potremmo renderlo più evidente..."
+    ✅ "Apprezziamo il suggerimento. Una possibile integrazione potrebbe essere..."
+    ❌ "Il revisore non ha compreso che..."
+    ❌ "È ovvio che..."
+
+    ## **STRUTTURA DELLA RISPOSTA**
+
+    ### **FORMATO STANDARD** (per la maggior parte dei casi):
+    1. **Analisi Rapida:** [1-2 frasi] Natura della critica e strategia
+    2. **Bozza di Risposta:** [2-4 frasi] Risposta concreta per il revisore
+
+    ### **FORMATO ESTESO** (solo per critiche complesse):
+    1. **Analisi Strategica:** Natura della critica e opzioni disponibili
+    2. **Azione Raccomandata:** Modifica specifica suggerita
+    3. **Bozza di Risposta:** Testo per il revisore
+
+    ## **CONTROLLI FINALI**
+    - ✅ La risposta è **concisa** ma completa?
+    - ✅ Affronta **solo** il punto sollevato dal revisore?
+    - ✅ È basata **esclusivamente** sul contenuto del draft?
+    - ✅ Il tono è **professionale** e **collaborativo**?
+
+# -- ROUTER: AGENT ACTIVATION LOGIC --
+router:
+  - agent: file_reader_agent
+    activate_if: [{field: state.current_phase, value: 'file_reading'}]
+    # task_overrides key matches the agent name as registered in the factory.
+    task: "{state.task_overrides.file_reader_agent}"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'review_parsing'}}
+
+  - agent: review_parser_agent
+    activate_if: [{field: state.current_phase, value: 'review_parsing'}]
+    task:
+      template: parse_review_task
+      parameters:
+        # Parameter name matches the Italian placeholder {testo_review_originale}
+        # in the prompt template above.
+        testo_review_originale: state.collected_data.testo_review_originale
+    update_state:
+      # Write only the extracted comments key rather than overwriting all of
+      # collected_data, preserving testo_draft_originale for downstream agents.
+      - {assign: {to: state.collected_data.commenti_revisori, from: output.commenti_revisori}}
+      - {assign: {to: state.current_phase, value: 'critique_categorisation'}}
+
+  - agent: critique_categoriser_agent
+    activate_if: [{field: state.current_phase, value: 'critique_categorisation'}]
+    # The task is the list of extracted comments resolved from state.
+    task: "{state.collected_data.commenti_revisori}"
+    update_state:
+      - {assign: {to: state.collected_data.commenti_revisori_categorizzati, from: output.commenti_revisori_categorizzati}}
+      - {assign: {to: state.current_phase, value: 'strategy_generation'}}
+
+  - agent: response_strategist_agent
+    activate_if: [{field: state.current_phase, value: 'strategy_generation'}]
+    # The task is the categorised comment list from the previous phase.
+    task: "{state.collected_data.commenti_revisori_categorizzati}"
+    update_state:
+      - {assign: {to: state.collected_data.commenti_con_risposta, from: output.commenti_con_risposta}}
+      - {assign: {to: state.current_phase, value: 'response_compilation'}}
+
+  - agent: response_compiler_agent
+    activate_if: [{field: state.current_phase, value: 'response_compilation'}]
+    # The task is the comment list enriched with drafted replies.
+    task: "{state.collected_data.commenti_con_risposta}"
+    update_state:
+      - {assign: {to: state.collected_data.report_finale_markdown, from: output}}
+      - {assign: {to: state.current_phase, value: 'file_saving'}}
+
+  - agent: file_writer_agent
+    activate_if: [{field: state.current_phase, value: 'file_saving'}]
+    task:
+      output_dir: "output"
+      filename: "{state.start_timestamp}_{state.run_id}_supporto_review.md"
+    update_state:
+      - {assign: {to: state.final_output, from: output}}
+      - {assign: {to: state.current_phase, value: 'completed'}}

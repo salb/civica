@@ -1,0 +1,177 @@
+# config_travel.yaml
+# Workflow configuration for travel (mission) requests (richiesta_missione).
+# Optionally produces a linked timesheet entry when timesheet_richiesto is true.
+# Prompt templates are kept in Italian as a localisation example.
+
+initial_state:
+  collected_data: {}
+  current_phase: 'data_extraction'
+  user_request: null
+  request_type: 'richiesta_missione'
+
+settings:
+  max_cycles: 20
+  max_parallel_agents: 1
+
+validation_schemas:
+  richiesta_missione:
+    nome_richiedente: { required: true, question: "Chi è il richiedente della missione?", normalization: 'titlecase' }
+    progetto: { required: true, question: "A quale progetto è associata la missione?", normalization: 'uppercase' }
+    destinazione: { required: true, question: "Qual è la destinazione della missione?" }
+    data_partenza: { required: true, question: "Qual è la data di partenza (YYYY-MM-DD)?", type: 'date' }
+    data_ritorno: { required: true, question: "Qual è la data di ritorno (YYYY-MM-DD)?", type: 'date' }
+    motivo: { required: true, question: "Qual è lo scopo/motivo della missione?" }
+    costo_stimato: { required: true, question: "Qual è il costo stimato in Euro?", type: 'float' }
+    mezzo_trasporto: { required: true, question: "Quale mezzo di trasporto verrà utilizzato?" }
+    timesheet_richiesto: { required: true, type: 'bool', question: "La missione è associata a un progetto. Vuoi generare automaticamente anche il timesheet? (rispondi 'si' o 'no')" }
+
+output_templates:
+  missione:
+    missione:
+      nome_richiedente: "{nome_richiedente}"
+      destinazione: "{destinazione}"
+      date: { partenza: "{data_partenza}", ritorno: "{data_ritorno}" }
+      dettagli: { motivo: "{motivo}", costo_stimato_euro: "{costo_stimato}", progetto: "{progetto}" }
+  timesheet:
+    registrazione_timesheet:
+      progetto: "{progetto}"
+      periodo: { dal: "{data_inizio}", al: "{data_fine}" }
+      dettaglio_attivita: "{descrizione_attivita}"
+
+# Context preparators run once per cycle before the router.
+# Serialises the validation schema for richiesta_missione into a JSON string
+# so it can be injected verbatim into the extraction prompt.
+context_preparators:
+  - assign:
+      to: state.schema_per_estrazione_str
+      from: state.validation_schemas.richiesta_missione
+      format: json_string
+
+prompt_templates:
+  estrazione_dati: |
+    Sei un assistente AI per l'estrazione dati, estremamente preciso.
+    Il tuo unico scopo è analizzare il "Testo da analizzare" e restituire
+    un oggetto JSON con le chiavi definite nel seguente schema.
+
+    SCHEMA DEI CAMPI DA ESTRARRE:
+    {schema_per_estrazione_str}
+
+    REGOLE:
+    - Usa come chiavi del JSON di output ESATTAMENTE i nomi delle chiavi
+      presenti nello schema (primo livello).
+    - Se un'informazione non è presente o non è desumibile dal testo,
+      imposta il valore a null.
+    - Per i campi con "type": "date", formatta il valore come YYYY-MM-DD.
+    - Per i campi con "type": "float", restituisci un numero (es. 1250.0),
+      non una stringa.
+    - Il campo `timesheet_richiesto` NON deve essere estratto dal testo:
+      impostalo sempre a null. Verrà raccolto separatamente dall'utente.
+    CONTESTO: Anno corrente: {anno_corrente}.
+    TESTO DA ANALIZZARE: "{richiesta_utente}"
+
+  arricchimento_motivo_missione: |
+    Sei un funzionario dell'Ufficio Missioni dell'Istituto Nazionale di Geofisica e Vulcanologia (INGV).
+    Il tuo compito è rielaborare il seguente motivo di missione per renderlo adatto a un documento di autorizzazione formale, evidenziando l'importanza e la pertinenza dell'attività per l'Ente.
+    MOTIVO ORIGINALE FORNITO DAL RICHIEDENTE:
+    "{motivo}"
+    ---
+    RISPONDI SOLO ED ESCLUSIVAMENTE CON IL TESTO DEL MOTIVO ARRICCHITO.
+
+  arricchimento_attivita_timesheet_pm: |
+    Sei un project manager senior dell'Istituto Nazionale di Geofisica e Vulcanologia (INGV).
+    Il tuo compito è prendere la seguente descrizione di un'attività da un timesheet e riscriverla in modo formale e professionale, come se dovessi presentarla in un report di progetto.
+    TESTO ORIGINALE INSERITO NEL TIMESHEET:
+    "{testo_originale}"
+    ---
+    RISPONDI SOLO ED ESCLUSIVAMENTE CON LA DESCRIZIONE FORMALE DELL'ATTIVITÀ.
+
+router:
+  - agent: data_extractor_agent
+    activate_if: [{field: state.current_phase, value: 'data_extraction'}]
+    task:
+      template: estrazione_dati
+      parameters:
+        schema_per_estrazione_str: state.schema_per_estrazione_str
+        richiesta_utente: state.user_request
+        anno_corrente: state.current_date
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'data_validation'}}
+
+  - agent: formal_validator_agent
+    activate_if: [{field: state.current_phase, value: 'data_validation'}]
+    task: "richiesta_missione"
+    update_state:
+      - if: [{field: output.success, operator: equals, value: false}]
+        then:
+          - {assign: {to: state.pending_questions, from: output.pending_questions}}
+          - {assign: {to: state.current_phase, value: 'clarification_request'}}
+        else:
+          - {assign: {to: state.current_phase, value: 'motive_enrichment'}}
+
+  - agent: human_input_agent
+    activate_if: [{field: state.current_phase, value: 'clarification_request'}]
+    task: "ask_from_state"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.pending_questions, value: []}}
+      - {assign: {to: state.current_phase, value: 'data_normalization'}}
+
+  - agent: data_normalizer_agent
+    activate_if: [{field: state.current_phase, value: 'data_normalization'}]
+    task: "default"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'data_validation'}}
+
+  - agent: semantic_enrichment_agent
+    activate_if: [{field: state.current_phase, value: 'motive_enrichment'}]
+    task:
+      template: arricchimento_motivo_missione
+      parameters:
+        motivo: state.collected_data.motivo
+    update_state:
+      - {assign: {to: state.collected_data.motivo, from: output}}
+      - {assign: {to: state.current_phase, value: 'travel_form_compilation'}}
+
+  - agent: compiler_agent
+    activate_if: [{field: state.current_phase, value: 'travel_form_compilation'}]
+    task: {use_template: "missione"}
+    update_state:
+      - {assign: {to: state.collected_data.json_missione, from: output}}
+      - if:
+          - {field: state.collected_data.timesheet_richiesto, operator: equals, value: true}
+        then:
+          - {assign: {to: state.collected_data.data_inizio, from: state.collected_data.data_partenza}}
+          - {assign: {to: state.collected_data.data_fine, from: state.collected_data.data_ritorno}}
+          - {assign: {to: state.collected_data.descrizione_attivita, from: state.collected_data.motivo}}
+          - {assign: {to: state.current_phase, value: 'timesheet_enrichment_from_travel'}}
+        else:
+          - {assign: {to: state.final_output, from: output}}
+          - {assign: {to: state.current_phase, value: 'completed'}}
+
+  - agent: semantic_enrichment_agent
+    activate_if: [{field: state.current_phase, value: 'timesheet_enrichment_from_travel'}]
+    task:
+      template: arricchimento_attivita_timesheet_pm
+      parameters:
+        testo_originale: state.collected_data.descrizione_attivita
+    update_state:
+      - {assign: {to: state.collected_data.descrizione_attivita, from: output}}
+      - {assign: {to: state.collected_data.data_inizio, from: state.collected_data.data_partenza}}
+      - {assign: {to: state.collected_data.data_fine, from: state.collected_data.data_ritorno}}
+      - {assign: {to: state.current_phase, value: 'timesheet_compilation'}}
+
+  - agent: compiler_agent
+    activate_if: [{field: state.current_phase, value: 'timesheet_compilation'}]
+    task: {use_template: "timesheet"}
+    update_state:
+      - {assign: {to: state.collected_data.json_timesheet, from: output}}
+      - {assign: {to: state.current_phase, value: 'output_combination'}}
+
+  - agent: output_combiner_agent
+    activate_if: [{field: state.current_phase, value: 'output_combination'}]
+    task: "default"
+    update_state:
+      - {assign: {to: state.final_output, from: output}}
+      - {assign: {to: state.current_phase, value: 'completed'}}

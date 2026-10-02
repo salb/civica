@@ -1,0 +1,33 @@
+# config_research_assistant.yaml
+# Main configuration for the AI Research Assistant.
+# Defines the AI model tier map, the available workflows, and the
+# top-level triage prompt template.
+#
+# Workflow identifiers (supporto_review, review_simulata, analisi_sovrapposizione)
+# are kept in Italian because they must match the 'tipo_workflow' value returned
+# by the Italian triage prompt. Translating them would require translating the
+# prompt, which is outside the scope of this localisation layer.
+
+ai_models:
+  low: 'gpt-5.4-nano'
+  normal: 'gpt-5.4-mini'
+  high: 'gpt-5.4'
+
+workflows:
+  supporto_review:
+    config_file: "config/config_review_support.yaml"
+  review_simulata:
+    config_file: "config/config_simulated_review.yaml"
+  analisi_sovrapposizione:
+    config_file: "config/config_overlap_analysis.yaml"
+
+prompt_templates:
+  triage_principale_task: |
+    Sei il centralino intelligente di un assistente AI per ricercatori. 
+    Il tuo unico compito è analizzare la richiesta dell'utente e classificarla in una delle seguenti categorie:
+    - 'supporto_review': L'utente vuole aiuto per rispondere a una peer review che ha ricevuto.
+    - 'review_simulata': L'utente vuole che tu agisca come un revisore e critichi un suo testo.
+    - 'analisi_sovrapposizione': L'utente vuole confrontare due testi per trovare somiglianze o novità.
+    - 'sconosciuto': La richiesta non rientra in nessuna delle categorie precedenti.
+
+    Rispondi OBBLIGATORIAMENTE e UNICAMENTE con un oggetto JSON valido contenente una sola chiave: 'tipo_workflow'.

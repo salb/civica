@@ -1,0 +1,34 @@
+# config_administrative_assistant.yaml
+# Main configuration for the AI Administrative Assistant.
+# Defines the AI model tier map, the available workflows, and the
+# top-level triage prompt template.
+#
+# Workflow identifiers (richiesta_acquisto, richiesta_missione,
+# compilazione_timesheet) are kept in Italian because they must match
+# the 'tipo_workflow' value returned by the Italian triage prompt,
+# and are also used as request_type values and validation schema keys
+# within the respective workflow configurations.
+
+ai_models:
+  low: 'gpt-5.4-nano'
+  normal: 'gpt-5.4-mini'
+  high: 'gpt-5.4'
+
+workflows:
+  richiesta_acquisto:
+    config_file: "config/config_procurement.yaml"
+  richiesta_missione:
+    config_file: "config/config_travel.yaml"
+  compilazione_timesheet:
+    config_file: "config/config_timesheet.yaml"
+
+prompt_templates:
+  triage_amministrativo_task: |
+    Sei il centralino intelligente di un assistente AI per pratiche amministrative.
+    Il tuo unico compito è analizzare la richiesta dell'utente e classificarla in una delle seguenti categorie di workflow:
+    - 'richiesta_acquisto': L'utente vuole avviare una pratica per un acquisto di beni o servizi.
+    - 'richiesta_missione': L'utente deve compilare moduli per una missione.
+    - 'compilazione_timesheet': L'utente vuole compilare un timesheet.
+    - 'sconosciuto': La richiesta non rientra in nessuna delle categorie precedenti.
+
+    Rispondi OBBLIGATORIAMENTE e UNICAMENTE con un oggetto JSON valido contenente una sola chiave: 'tipo_workflow'.

@@ -1,0 +1,163 @@
+# config_simulated_review.yaml
+# Workflow configuration for the simulated peer review (review_simulata).
+# Three AI agents (critical reviewer, constructive reviewer, editor) analyse
+# the manuscript draft and produce an integrated editorial report.
+# Prompt templates are kept in Italian as a localisation example.
+
+initial_state:
+  collected_data: {}
+  current_phase: 'file_reading'
+
+settings:
+  max_cycles: 10
+  max_parallel_agents: 1
+
+prompt_templates:
+  revisore_critico_task: |
+    Sei un revisore accademico senior con expertise nel campo specifico del manoscritto. Conduci una valutazione rigorosa secondo i criteri standard delle riviste top-tier. Valuta sistematicamente:
+  
+    CRITERI DI VALUTAZIONE:
+    - Originalità e significatività del contributo
+    - Rigore metodologico e validità statistica
+    - Chiarezza di esposizione e struttura logica
+    - Completezza della letteratura e posizionamento teorico
+    - Qualità dei dati e delle evidenze presentate
+    - Generalizzabilità e limitazioni
+    - Aspetti etici e di riproducibilità
+  
+    Per ogni problema identificato, indica:
+    1. La gravità (Critica/Maggiore/Minore)
+    2. Suggerimenti specifici per la risoluzione
+    3. Se influenza l'accettabilità per pubblicazione
+  
+    OUTPUT JSON:
+    {
+      "commenti_critici": [
+        {
+          "area": "Metodologia",
+          "gravita": "Critica|Maggiore|Minore", 
+          "critica": "Descrizione specifica del problema",
+          "suggerimento_risoluzione": "Come risolvere il problema",
+          "impatto_pubblicabilita": "Alto|Medio|Basso"
+        }
+      ],
+      "valutazione_complessiva": "Riassunto della qualità generale (2-3 frasi)"
+    }
+
+  revisore_propositivo_task: |
+    Sei un mentore accademico esperto che aiuta i ricercatori a massimizzare l'impatto del loro lavoro. Identifica opportunità di miglioramento e valorizzazione, concentrandoti su:
+  
+    ASPETTI DA VALORIZZARE:
+    - Contributi teorici e metodologici unici
+    - Potenziale impatto sulla comunità scientifica
+    - Qualità della execution e dell'analisi
+    - Innovazione nell'approccio o nei risultati
+    - Chiarezza comunicativa e accessibilità
+    - Possibili estensioni e sviluppi futuri
+  
+    Per ogni punto di forza, spiega perché è importante e come può essere ulteriormente sviluppato.
+  
+    OUTPUT JSON:
+    {
+      "commenti_propositivi": [
+        {
+          "categoria": "Metodologia|Risultati|Contributo Teorico|Presentation|Altro",
+          "punto_di_forza": "Cosa funziona bene e perché è importante",
+          "valore_aggiunto": "Perché questo aspetto aggiunge valore al campo",
+          "suggerimento_enhancement": "Come amplificare o migliorare questo punto di forza",
+          "priorita": "Alta|Media|Bassa"
+        }
+      ],
+      "potenziale_impatto": "Valutazione del possibile impatto del lavoro",
+      "raccomandazioni_strategiche": ["Lista di 2-3 suggerimenti ad alto livello"]
+    }
+
+  editor_task: |
+    Sei l'editor-in-chief di una rivista di primo livello nel campo specifico. Sintetizza le review in un report editoriale professionale che guidi l'autore verso il miglioramento del manoscritto.
+  
+    STRUTTURA DEL REPORT:
+  
+    ## Decisione Editoriale
+    **Raccomandazione**: [Accetta/Revisioni Minori/Revisioni Maggiori/Rifiuta]
+    **Giustificazione**: [2-3 frasi che spiegano la decisione basata sulle review]
+  
+    ## Priorità di Intervento
+  
+    ### Questioni Critiche (Da risolvere obbligatoriamente)
+    - [Lista dei problemi che impediscono la pubblicazione]
+  
+    ### Miglioramenti Raccomandati (Fortemente consigliati)
+    - [Lista di miglioramenti che aumenterebbero significativamente la qualità]
+  
+    ### Suggerimenti Opzionali (Per consideration)
+    - [Suggerimenti che potrebbero aggiungere valore]
+  
+    ## Punti di Forza da Preservare
+    - [Aspetti del manoscritto che funzionano bene e non dovrebbero essere modificati]
+  
+    ## Timeline e Next Steps
+    - **Tempo stimato per revisioni**: [X settimane]
+    - **Aspetti da confermare nella revised submission**: [Lista di controllo]
+  
+    CONTESTO DELLE REVIEW:
+    Revisore Critico: {commenti_critici_json}
+    Revisore Propositivo: {commenti_propositivi_json}
+
+    MANOSCRITTO ORIGINALE DA VALUTARE:
+
+# --- WORKFLOW ROUTER ---
+router:
+  - agent: file_reader_agent
+    activate_if: [{field: state.current_phase, value: 'file_reading'}]
+    # task_overrides key matches the agent name as registered in the factory.
+    task: "{state.task_overrides.file_reader_agent}"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'critical_review'}}
+
+  - agent: critical_reviewer_agent
+    activate_if: [{field: state.current_phase, value: 'critical_review'}]
+    task:
+      template: revisore_critico_task
+      # The full draft text is appended after the prompt to keep large payloads
+      # out of the parameters mechanism (append_from_state pattern).
+      append_from_state: state.collected_data.testo_draft_originale
+    update_state:
+      # The whole review (comments + overall assessment) goes to its own key.
+      - {assign: {to: state.collected_data.review_critica, from: output}}
+      - {assign: {to: state.current_phase, value: 'constructive_review'}}
+
+  - agent: constructive_reviewer_agent
+    activate_if: [{field: state.current_phase, value: 'constructive_review'}]
+    task:
+      template: revisore_propositivo_task
+      append_from_state: state.collected_data.testo_draft_originale
+    update_state:
+      - {assign: {to: state.collected_data.review_propositiva, from: output}}
+      - {assign: {to: state.current_phase, value: 'editorial_synthesis'}}
+
+  - agent: editor_agent
+    activate_if: [{field: state.current_phase, value: 'editorial_synthesis'}]
+    task:
+      template: editor_task
+      append_from_state: state.collected_data.testo_draft_originale
+      parameters:
+        # Parameter names match Italian placeholders in the editor_task prompt.
+        commenti_critici_json:
+          path: state.collected_data.review_critica
+          format: json_string
+        commenti_propositivi_json:
+          path: state.collected_data.review_propositiva
+          format: json_string
+    update_state:
+      - {assign: {to: state.collected_data.report_finale_markdown, from: output}}
+      - {assign: {to: state.current_phase, value: 'file_saving'}}
+
+  - agent: file_writer_agent
+    activate_if: [{field: state.current_phase, value: 'file_saving'}]
+    task:
+      output_dir: "output"
+      filename: "{state.start_timestamp}_{state.run_id}_review_simulata.md"
+    update_state:
+      - {assign: {to: state.final_output, from: output}}
+      - {assign: {to: state.current_phase, value: 'completed'}}

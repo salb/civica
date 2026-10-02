@@ -1,0 +1,159 @@
+# config_procurement.yaml
+# Workflow configuration for procurement requests (richiesta_acquisto).
+# Prompt templates are kept in Italian as a localisation example.
+
+business_rules:
+  acquisti:
+    soglia_procedura_semplificata: 5000
+
+initial_state:
+  collected_data: {}
+  current_phase: 'data_extraction'
+  user_request: null
+
+settings:
+  max_cycles: 20
+  max_parallel_agents: 1
+
+administrative_constants:
+  nome_direttore: "Ing. Mario Rossi"
+  nome_sezione: "Roma 1"
+  nome_rup: "Dr. Antonio Bianchi"
+  sezione_rup: "Amministrazione Centrale"
+
+validation_schemas:
+  richiesta_acquisto:
+    descrizione_bene: { required: true, question: "Fornisci una descrizione dettagliata del bene da acquistare." }
+    costo_stimato: { required: true, question: "Qual è il costo stimato totale in Euro?", type: "float" }
+    motivazione: { required: true, question: "Qual è la motivazione dell'acquisto?" }
+    progetto: { required: true, question: "A quale progetto è associato questo acquisto?", normalization: 'uppercase' }
+    nome_richiedente: { required: true, question: "Chi è il richiedente formale?", normalization: 'titlecase' }
+    fornitore_suggerito: { required: true, question: "Qual è il nome del fornitore scelto?" }
+    cf_fornitore: { required: true, question: "Qual è la Partita IVA / Codice Fiscale del fornitore?" }
+    cig: { required: true, question: "Qual è il Codice Identificativo di Gara (CIG)?" }
+    numero_impegno: { required: true, question: "Qual è il numero dell'impegno di spesa?" }
+    data_impegno: { required: true, question: "Qual è la data dell'impegno di spesa (YYYY-MM-DD)?", type: 'date' }
+    capitolo_spesa: { required: true, question: "Qual è il capitolo di spesa?" }
+    obiettivo_funzione: { required: true, question: "Qual è l'obiettivo funzione?" }
+    urgenza: { required: false, type: 'bool' }
+
+output_templates:
+  modulo_acquisto_definitivo:
+    urgente: "{urgenza}"
+    nome_sezione: "{nome_sezione}"
+    nome_rup: "{nome_rup}"
+    descrizione_bene: "{descrizione_bene}"
+    importo_soglia: "{importo_soglia}"
+    nome_direttore: "{nome_direttore}"
+    sezione_rup: "{sezione_rup}"
+    modalita_acquisto: "{modalita_acquisto}"
+    cf_fornitore: "{cf_fornitore}"
+    cup: "{cup}"
+    importo_totale: "{costo_stimato}"
+    riferimento_normativo_completo: "{normativa_rif}, {articolo_norma_rif}"
+    motivazione_arricchita: "{motivazione}"
+    progetto: "{progetto}"
+    richiedente: "{nome_richiedente}"
+    fornitore: "{fornitore_suggerito}"
+    cig: "{cig}"
+    numero_impegno: "{numero_impegno}"
+    data_impegno: "{data_impegno}"
+    capitolo_spesa: "{capitolo_spesa}"
+    obiettivo_funzione: "{obiettivo_funzione}"
+    dicitura_obbligatoria: "{dicitura_obbligatoria}"
+
+prompt_templates:
+  estrazione_dati_acquisto_task: |
+    Sei un assistente amministrativo. Estrai da questa richiesta TUTTE le seguenti informazioni in un JSON: "descrizione_bene", "costo_stimato", "motivazione", "progetto", "nome_richiedente", "fornitore_suggerito", "cf_fornitore", "cig", "numero_impegno", "data_impegno", "capitolo_spesa", "obiettivo_funzione", "urgenza".
+    Per il campo 'urgenza', impostalo a 'true' solo se nel testo sono presenti parole come 'urgente', 'subito', 'immediato', 'bloccati'.
+    Se un dato non è presente, imposta il suo valore a null.
+    Richiesta Utente: "{richiesta_utente}"
+
+  arricchimento_motivazione_task: |
+    Sei un dirigente dell'Istituto Nazionale di Geofisica e Vulcanologia (INGV), esperto nella stesura di motivazioni per procedure d'acquisto.
+    Il tuo compito è arricchire la seguente motivazione, rendendola più formale, dettagliata e allineata agli obiettivi strategici dell'Ente. Evita di ripetere dati già presenti in altri campi (costo, progetto, etc.).
+    CONTESTO DELLA PRATICA:
+    - Bene da acquistare: {descrizione_bene}
+    - Costo: {costo_stimato} €
+    - Progetto di riferimento: {progetto}
+    ---
+    MOTIVAZIONE ORIGINALE FORNITA DAL RICHIEDENTE:
+    "{motivazione}"
+    ---
+    RISPONDI SOLO ED ESCLUSIVAMENTE CON IL TESTO DELLA MOTIVAZIONE ARRICCHITA.
+
+router:
+  - agent: data_extractor_agent
+    activate_if: [{field: state.current_phase, value: 'data_extraction'}]
+    task:
+      template: estrazione_dati_acquisto_task
+      parameters:
+        richiesta_utente: state.user_request
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'data_normalization'}}
+
+  - agent: formal_validator_agent
+    activate_if: [{field: state.current_phase, value: 'data_validation'}]
+    task: "richiesta_acquisto"
+    update_state:
+      - if: [{field: output.success, operator: equals, value: false}]
+        then:
+          - {assign: {to: state.pending_questions, from: output.pending_questions}}
+          - {assign: {to: state.current_phase, value: 'awaiting_user_input'}}
+        else:
+          - {assign: {to: state.current_phase, value: 'procedure_decision'}}
+
+  - agent: human_input_agent
+    activate_if: [{field: state.current_phase, value: 'awaiting_user_input'}]
+    task: "ask_from_state"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'data_normalization'}}
+
+  - agent: data_normalizer_agent
+    activate_if: [{field: state.current_phase, value: 'data_normalization'}]
+    task: "default"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'data_validation'}}
+
+  - agent: procurement_decision_agent
+    activate_if: [{field: state.current_phase, value: 'procedure_decision'}]
+    task: "default"
+    update_state:
+      - {assign: {to: state.collected_data, from: output}}
+      - {assign: {to: state.current_phase, value: 'budget_check'}}
+
+  - agent: budget_validator_agent
+    activate_if: [{field: state.current_phase, value: 'budget_check'}]
+    task: "default"
+    update_state:
+      - if: [{field: output.esito, operator: equals, value: 'APPROVATA'}]
+        then:
+          - {assign: {to: state.collected_data.cup, from: output.cup}}
+          - {assign: {to: state.collected_data.dicitura_obbligatoria, from: output.dicitura_obbligatoria}}
+          - {assign: {to: state.current_phase, value: 'motivation_enrichment'}}
+        else:
+          - {assign: {to: state.final_output, from: output}}
+          - {assign: {to: state.current_phase, value: 'completed'}}
+
+  - agent: semantic_enrichment_agent
+    activate_if: [{field: state.current_phase, value: 'motivation_enrichment'}]
+    task:
+      template: arricchimento_motivazione_task
+      parameters:
+        descrizione_bene: state.collected_data.descrizione_bene
+        costo_stimato: state.collected_data.costo_stimato
+        progetto: state.collected_data.progetto
+        motivazione: state.collected_data.motivazione
+    update_state:
+      - {assign: {to: state.collected_data.motivazione, from: output}}
+      - {assign: {to: state.current_phase, value: 'form_compilation'}}
+
+  - agent: compiler_agent
+    activate_if: [{field: state.current_phase, value: 'form_compilation'}]
+    task: {use_template: modulo_acquisto_definitivo}
+    update_state:
+      - {assign: {to: state.final_output, from: output}}
+      - {assign: {to: state.current_phase, value: 'completed'}}

@@ -1,0 +1,87 @@
+# config_overlap_analysis.yaml
+#
+# Overlap analysis workflow: structured comparison of two research texts
+# (papers, abstracts, dataset descriptions, or manuscript sections).
+#
+# Workflow identifier: analisi_sovrapposizione
+# Agent: TextComparatorAgent (model_tier: normal)
+# Output: JSON with keys elementi_comuni, divergenze, gap_identificati,
+#         raccomandazioni — written to disk via FileWriterAgent.
+
+initial_state:
+  collected_data: {}
+  current_phase: "reading"
+  final_output: null
+
+settings:
+  max_cycles: 8
+  max_parallel_agents: 1
+
+prompt_templates:
+  confronto_testi_task: |
+    Sei un analista scientifico specializzato nel confronto tra testi di ricerca.
+    Ti vengono forniti due testi: il Testo A e il Testo B.
+
+    Il tuo compito è produrre un'analisi strutturata in formato JSON con
+    esattamente quattro chiavi:
+
+    - "elementi_comuni": lista di stringhe — affermazioni, metodi o risultati
+      presenti in entrambi i testi.
+    - "divergenze": lista di stringhe — contraddizioni esplicite o scelte
+      metodologiche incompatibili tra i due testi.
+    - "gap_identificati": lista di stringhe — aspetti trattati in un testo
+      e assenti nell'altro, con indicazione di quale testo li contiene.
+    - "raccomandazioni": lista di stringhe — suggerimenti operativi derivati
+      dall'analisi (es. integrazioni possibili, conflitti da risolvere,
+      riferimenti incrociati opportuni).
+
+    Sii preciso e conciso. Ogni voce nelle liste deve essere una frase
+    autonoma e autoesplicativa.
+
+    ---
+    TESTO A:
+    {testo_documento_a}
+    ---
+    TESTO B:
+    {testo_documento_b}
+    ---
+
+router:
+
+  - agent: file_reader_agent
+    activate_if: [{field: state.current_phase, value: 'reading'}]
+    task: "{state.task_overrides.file_reader_agent}"
+    update_state:
+      - {assign: {to: state.collected_data.testo_documento_a, from: output.testo_review_originale}}
+      - {assign: {to: state.collected_data.testo_documento_b, from: output.testo_draft_originale}}
+      - {assign: {to: state.current_phase, value: 'comparison'}}
+
+  - agent: text_comparator_agent
+    activate_if: [{field: state.current_phase, value: 'comparison'}]
+    task:
+      template: confronto_testi_task
+      parameters:
+        testo_documento_a: state.collected_data.testo_documento_a
+        testo_documento_b: state.collected_data.testo_documento_b
+    update_state:
+      - {assign: {to: state.collected_data.elementi_comuni,  from: output.elementi_comuni}}
+      - {assign: {to: state.collected_data.divergenze,        from: output.divergenze}}
+      - {assign: {to: state.collected_data.gap_identificati,  from: output.gap_identificati}}
+      - {assign: {to: state.collected_data.raccomandazioni,   from: output.raccomandazioni}}
+      - {assign: {to: state.current_phase, value: 'assembly'}}
+
+  - agent: comparison_report_assembler_agent
+    activate_if: [{field: state.current_phase, value: 'assembly'}]
+    task: "default"
+    update_state:
+      - {assign: {to: state.collected_data.report_finale_markdown, from: output.report_finale_markdown}}
+      - {assign: {to: state.current_phase, value: 'file_saving'}}
+
+  - agent: file_writer_agent
+    activate_if: [{field: state.current_phase, value: 'file_saving'}]
+    task:
+      output_dir: "output"
+      filename: "{state.start_timestamp}_{state.run_id}_analisi_sovrapposizione.md"
+    update_state:
+      - {assign: {to: state.final_output, from: output}}
+      - {assign: {to: state.current_phase, value: 'completed'}}
