@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "civica"
+version = "1.0.0"
+description = "YAML-driven orchestrator for hybrid symbolic-AI document workflows"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.0",
+    "pyyaml>=6.0",
+    "python-dateutil>=2.8",
+    "python-dotenv>=1.0",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+[tool.setuptools]
+# Flat layout: the modules live in the repository root, not in a package.
+py-modules = [
+    "agents_administrative_assistant",
+    "agents_research_assistant",
+    "core_framework",
+    "logger_config",
+    "orchestrator",
+    "run_administrative_assistant",
+    "run_research_assistant",
+    "utils",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*"]
