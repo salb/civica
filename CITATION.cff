@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+
+message: "If you use Civica in your research, please cite the software and the associated SoftwareX article."
+
+title: "Civica: a YAML-driven orchestrator for hybrid symbolic–AI document workflows"
+
+type: software
+
+authors:
+  - family-names: "Barba"
+    given-names: "Salvatore"
+
+version: "1.0.0"
+
+repository-code: "https://github.com/salb/civica"
+
+license: "BSD-3-Clause"
+
+keywords:
+  - artificial intelligence
+  - workflow orchestration
+  - large language models
+  - YAML
+  - hybrid AI
+  - public administration
+  - research workflows
+  - reproducible software
