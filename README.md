@@ -58,7 +58,7 @@ router:
           - {assign: {to: state.current_phase, value: 'procedure_decision'}}
 ```
 
-The configuration language has four constructs: `activate_if`/`if` conditions (operators `equals`, `not_equals`, `in`, `exists`), `assign` rules (`value` or `from`), `context_preparators` (with an optional `json_string` format), and prompt `parameters`. Each workflow file also declares its `validation_schemas`, `prompt_templates`, `output_templates` and `settings` (e.g. `max_cycles`).
+The configuration language has four constructs: `activate_if`/`if` conditions (operators `equals`, `not_equals`, `in`, `exists`), `assign` rules (`value` or `from`), `context_preparators` (with an optional `json_string` format), and prompt `parameters`. Each workflow file also declares the sections it needs among `validation_schemas`, `prompt_templates`, `output_templates` and `settings` (e.g. `max_cycles`).
 
 AI agents declare a model tier (`low`, `normal`, `high`), resolved to a concrete model through the `ai_models` map of the main configuration. Agents never name a model directly.
 
@@ -148,7 +148,10 @@ What the tests can verify is what reaches the LLM and what the system does with 
 ├── utils.py                            # shared helpers (placeholders, templates, presence checks)
 ├── config/                             # main configurations and one YAML file per workflow
 ├── tests/                              # pytest suite
-└── pyproject.toml
+├── pyproject.toml
+├── .github/workflows/tests.yml         # CI on Python 3.11 and 3.14
+├── .env.example                        # template for the API key
+└── LICENSE
 ```
 
 ## Adding a workflow
@@ -165,9 +168,11 @@ What the tests can verify is what reaches the LLM and what the system does with 
 - **Demonstration data.** The project budget table used by the procurement workflow and the administrative constants are fixtures. A production deployment would replace them with the institution's accounting and staff systems.
 - **Triage outside the declarative layer.** Classification of the initial request into a workflow is done by the runners in Python, not declared in YAML.
 - **Validation at run time.** Malformed configuration is detected when the faulty rule is first evaluated, not when the file is loaded. Static validation of the whole configuration is future work.
+- **Unknown model tier.** An agent whose tier is missing from the `ai_models` map falls back to a default model instead of stopping the workflow.
 - **Shallow configuration merge.** Workflow configurations are merged with the main configuration one level deep.
 - **Single LLM provider.** The client mixin targets the OpenAI API.
 - **Text-only form values.** Compiled forms render numbers as text, and missing optional values as `N/A`.
+- **Dates with month names.** The normaliser recognises numeric dates (ISO and Italian formats); dates written with month names, such as "3 marzo 2026", are not normalised.
 
 ---
 
