@@ -3,6 +3,7 @@ import copy
 import logging
 import re
 import time
+import traceback
 from typing import Any
 
 import yaml
@@ -539,6 +540,7 @@ class AdvancedOrchestrator:
         self.logger.demo(f'🗣️  "{self.state.get_user_request()}"')
         self.logger.demo("----------------------------\n")
 
+        stop_reason = None
         for i in range(max_cycles):
             self.state.set_current_cycle(i)
 
@@ -569,6 +571,7 @@ class AdvancedOrchestrator:
                 self.logger.demo(
                     "No agents activated. The workflow may be blocked or complete."
                 )
+                stop_reason = "no_agent_activated"
                 break
 
             # Respect the max_parallel_agents setting (guards against null in YAML)
@@ -632,7 +635,24 @@ class AdvancedOrchestrator:
                 state_before = copy.deepcopy(self.state)
                 start_time = time.time()
 
-                success, output = agent_instance.run(task_input, self.state)
+                # An agent may report failure by returning False, or fail by
+                # raising. Both must take the same path: diagnosis, structured
+                # log entry and failure envelope. Only the agent call is
+                # guarded; configuration errors raised by the orchestrator
+                # itself (malformed YAML in update_state) must stay loud.
+                failure_reason = "agent_reported_failure"
+                try:
+                    success, output = agent_instance.run(task_input, self.state)
+                except Exception as exc:
+                    self.logger.exception(
+                        f"🔥 Agent '{active_rule['agent']}' raised an exception."
+                    )
+                    success = False
+                    failure_reason = "agent_exception"
+                    output = {
+                        "failure_reason": f"{type(exc).__name__}: {exc}",
+                        "traceback": traceback.format_exc(),
+                    }
 
                 end_time = time.time()
                 duration_ms = (end_time - start_time) * 1000
@@ -700,18 +720,64 @@ class AdvancedOrchestrator:
                     # callers can tell it apart from a successful output.
                     self.state.set_final_output({
                         "status": "failed",
+                        "reason": failure_reason,
                         "failed_agent": active_rule.get("agent"),
+                        "error": output.get("failure_reason")
+                        if isinstance(output, dict) else output,
                         "diagnosis": debug_analysis,
                     })
                     break
 
             if self.state.get_final_output():
                 break
+        else:
+            # The for loop ran out of cycles without a break.
+            stop_reason = "max_cycles_exhausted"
 
-        return (
-            self.state.get_final_output()
-            or "Workflow terminated without producing a final output."
+        # A workflow that stops without a final output has not completed:
+        # it is reported as a failure, not returned as a message that a
+        # caller could mistake for a result. The cause is known from the
+        # rules alone, so no model is asked to diagnose it.
+        if not self.state.get_final_output():
+            self._set_termination_failure(stop_reason, max_cycles)
+
+        return self.state.get_final_output()
+
+    def _set_termination_failure(self, reason: str, max_cycles: int) -> None:
+        """
+        Wraps an anomalous termination (no agent activated, or cycle limit
+        reached) in the same failure envelope used for agent failures, and
+        emits a structured log entry so the run can be reconstructed.
+        """
+        messages = {
+            "no_agent_activated": (
+                "No router rule matched the current state: the workflow "
+                "is blocked before producing a final output."
+            ),
+            "max_cycles_exhausted": (
+                f"The cycle limit ({max_cycles}) was reached before a "
+                f"final output was produced."
+            ),
+        }
+        envelope = {
+            "status": "failed",
+            "reason": reason,
+            "failed_agent": None,
+            "error": messages[reason],
+            "phase": self.state.get_phase(),
+            "cycle": self.state.get_current_cycle(),
+        }
+        self.logger.error(f"❌ Workflow terminated: {messages[reason]}")
+        self.logger.json_debug(
+            "Workflow terminated without a final output.",
+            extra={
+                "cycle": self.state.get_current_cycle(),
+                "event_type": "WORKFLOW_FAILED",
+                "payload": envelope,
+            },
         )
+        self.state.set_final_output(envelope)
+
 
     def _log_state_transition(
         self, active_rule, success, output, state_before, duration_ms

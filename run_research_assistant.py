@@ -53,7 +53,15 @@ def run_research_workflow(
         f"\n[bold]--- Workflow result: [yellow]{workflow_type}[/yellow] ---[/bold]",
         extra={"markup": True},
     )
-    if isinstance(final_result, dict) and "saved_file_path" in final_result:
+    if isinstance(final_result, dict) and final_result.get("status") == "failed":
+        logger.error(
+            f"❌ Workflow failed ({final_result.get('reason')}): "
+            f"{final_result.get('error')}"
+        )
+        logger.demo(
+            "[dim]Details available in the JSON event log file.[/dim]"
+        )
+    elif isinstance(final_result, dict) and "saved_file_path" in final_result:
         logger.demo(
             f"✅ [bold green]Success![/bold green] Output file written to: "
             f"[cyan]{escape(final_result['saved_file_path'])}[/cyan]",
