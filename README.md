@@ -185,9 +185,7 @@ Civica was not commissioned from a vendor. It was built from inside a public res
 
 If you use Civica, please cite:
 
-> Barba, S. *Civica: a YAML-driven orchestrator for hybrid symbolic–AI document workflows.* SoftwareX (submitted).
-
-A DOI for the archived release will be added here.
+> Barba, S. *Civica: a YAML-driven orchestrator for hybrid symbolic–AI document workflows.* SoftwareX (submitted). https://doi.org/10.5281/zenodo.23162104
 
 ## License
 
