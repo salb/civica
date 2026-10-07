@@ -3,6 +3,7 @@
 [![tests](https://github.com/salb/civica/actions/workflows/tests.yml/badge.svg)](https://github.com/salb/civica/actions/workflows/tests.yml)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.14-blue)
 ![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23162104.svg)](https://doi.org/10.5281/zenodo.23162104)
 
 *Tecnologia che libera. Ricerca che evolve.* — Technology that frees. Research that evolves.
 
