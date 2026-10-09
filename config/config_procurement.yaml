@@ -5,6 +5,21 @@
 business_rules:
   acquisti:
     soglia_procedura_semplificata: 5000
+    # Procedure applied below and at/above the threshold. The legal
+    # references live here, not in the code, because they change through
+    # regulation: a new article or law means editing these lines.
+    procedura_sotto_soglia:
+      procedura: "semplificata"
+      richiede_integrazione: false
+      articolo_norma_rif: "art. 50, comma 1 lett. b)"
+      normativa_rif: "d.lgs. 36/2023"
+      modalita_acquisto: "Ordine Diretto di Acquisto (OdA) su MEPA"
+    procedura_sopra_soglia:
+      procedura: "complessa"
+      richiede_integrazione: false
+      articolo_norma_rif: "art. 76"
+      normativa_rif: "d.lgs. 36/2023"
+      modalita_acquisto: "Procedura Negoziata senza Bando"
 
 initial_state:
   collected_data: {}

@@ -96,7 +96,13 @@ router:
         anno_corrente: state.current_date
     update_state:
       - {assign: {to: state.collected_data, from: output}}
-      - {assign: {to: state.current_phase, value: 'data_validation'}}
+      # timesheet_richiesto decides a branch, so it must come from the user,
+      # never from the model: whatever the extractor returned is discarded
+      # and the formal validator will ask the question.
+      - {assign: {to: state.collected_data.timesheet_richiesto, value: null}}
+      # Normalise before the first validation, as in the procurement
+      # workflow: otherwise a complete extraction would skip normalisation.
+      - {assign: {to: state.current_phase, value: 'data_normalization'}}
 
   - agent: formal_validator_agent
     activate_if: [{field: state.current_phase, value: 'data_validation'}]
