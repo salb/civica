@@ -12,6 +12,7 @@ from datetime import date
 import yaml
 from dotenv import load_dotenv
 from rich import print as rprint
+from rich.markup import escape
 
 from agents_administrative_assistant import get_agent_instance as administrative_agent_factory
 from core_framework import get_utility_agent_instance
@@ -32,7 +33,8 @@ def run_admin_workflow(
     """
     logger = logging.getLogger(__name__)
     logger.demo(
-        f"\n[bold]--- Starting workflow: [yellow]{workflow_type}[/yellow] ---[/bold]"
+        f"\n[bold]--- Starting workflow: [yellow]{escape(workflow_type)}[/yellow] ---[/bold]",
+        extra={"markup": True},
     )
 
     composite_factory_instance = create_composite_factory(
@@ -64,7 +66,8 @@ def run_admin_workflow(
 
     # Log and save the final result
     logger.demo(
-        f"\n[bold]--- Workflow result: [yellow]{workflow_type}[/yellow] ---[/bold]"
+        f"\n[bold]--- Workflow result: [yellow]{escape(workflow_type)}[/yellow] ---[/bold]",
+        extra={"markup": True},
     )
     try:
         output_dir = "output"
@@ -151,7 +154,8 @@ def main():
 
             logger.demo(
                 f"Triage decision: launching workflow "
-                f"'[bold cyan]{workflow_type}[/bold cyan]'."
+                f"'[bold cyan]{escape(str(workflow_type))}[/bold cyan]'.",
+                extra={"markup": True},
             )
 
             specific_config_path = workflow_config["config_file"]

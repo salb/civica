@@ -223,12 +223,16 @@ class IterativeEnrichmentAgent(BaseAgent, OpenAIClientMixin):
                     system_prompt=specific_prompt, user_prompt="", is_json=False
                 )
 
-                if success:
-                    modified_item[text_key] = output
-                else:
-                    self.logger.demo(
-                        "  -> Enrichment failed — keeping original text."
-                    )
+                if not success:
+                    # Keeping the original text silently would produce a
+                    # timesheet that looks enriched but is not.
+                    return False, {
+                        "failure_reason": (
+                            f"Enrichment failed for item '{text_to_enrich}': "
+                            f"{output.get('failure_reason') if isinstance(output, dict) else output}"
+                        )
+                    }
+                modified_item[text_key] = output
 
             enriched_list.append(modified_item)
 
@@ -448,6 +452,8 @@ class BudgetValidatorAgent(BaseAgent):
     Rule-based agent that simulates a budget check against an in-memory
     project database and retrieves supplementary project metadata
     (mandatory notice text, CUP code) if the request is approved.
+    A project absent from the database is rejected, never given a default
+    budget.
 
     The project database is intentionally hardcoded as a self-contained
     demo fixture; production deployments should replace it with a call
@@ -469,11 +475,10 @@ class BudgetValidatorAgent(BaseAgent):
         try:
             cost = float(cost_str)
         except (ValueError, TypeError):
-            cost = 0.0
-            self.logger.demo(
-                f"💰 WARNING: Could not convert cost '{cost_str}' to a number. "
-                f"Defaulting to 0."
-            )
+            # A cost that is not a number cannot be checked against a budget.
+            return False, {
+                "failure_reason": f"Estimated cost '{cost_str}' is not a number."
+            }
 
         # --- DEMO PROJECT DATABASE ---
         project_database = {
@@ -490,17 +495,23 @@ class BudgetValidatorAgent(BaseAgent):
                 "cup": None,
                 "dicitura_obbligatoria": None,
             },
-            "DEFAULT": {
-                "budget": 10000.0,
-                "cup": None,
-                "dicitura_obbligatoria": None,
-            },
         }
 
         # --- BUDGET CHECK LOGIC ---
 
-        # 1. Retrieve the full project information object
-        project_info = project_database.get(project, project_database["DEFAULT"])
+        # 1. Retrieve the full project information object. An unknown project
+        #    is rejected: before 1.0.2 it fell back to a default budget, so
+        #    any invented project code was approved up to that amount.
+        project_info = project_database.get(project)
+        if project_info is None:
+            reason = (
+                f"Project '{project}' not found in the project register: "
+                f"budget coverage cannot be verified."
+            )
+            self.logger.demo(
+                f"💰 [Budget Validator Agent (Rules)] REJECTED: {reason}"
+            )
+            return True, {"esito": "RESPINTA", "motivazione": reason}
 
         # 2. Extract individual fields
         available_budget = project_info.get("budget", 0.0)
@@ -544,14 +555,25 @@ class BudgetValidatorAgent(BaseAgent):
 
 class ProcurementDecisionAgent(BaseAgent):
     """
-    Rule-based agent that determines the procurement procedure (simplified or
-    complex) based on a cost threshold read from the configuration.
+    Rule-based agent that determines the procurement procedure by comparing
+    the estimated cost with a threshold read from the configuration.
 
-    The threshold is read from config['business_rules']['acquisti']
-    ['soglia_procedura_semplificata']. Administrative constants (RUP name,
-    section, etc.) are merged into the output from
-    config['administrative_constants'].
+    Everything that depends on regulation is configuration, under
+    config['business_rules']['acquisti']:
+    - 'soglia_procedura_semplificata': the threshold;
+    - 'procedura_sotto_soglia' / 'procedura_sopra_soglia': the fields of the
+      procedure applied below and at/above it (procedure name, legal
+      references, purchasing method).
+    Missing rules are an authoring error: the agent fails instead of falling
+    back to defaults. Administrative constants (RUP name, section, etc.) are
+    merged into the output from config['administrative_constants'].
     """
+
+    _REQUIRED_RULES = (
+        "soglia_procedura_semplificata",
+        "procedura_sotto_soglia",
+        "procedura_sopra_soglia",
+    )
 
     def __init__(self, agent_config: dict = None, logger: logging.Logger = None):
         super().__init__(agent_config=agent_config, logger=logger)
@@ -562,45 +584,37 @@ class ProcurementDecisionAgent(BaseAgent):
             "Determining procurement procedure..."
         )
 
+        rules = self.agent_config.get("business_rules", {}).get("acquisti", {})
+        missing = [key for key in self._REQUIRED_RULES if key not in rules]
+        if missing:
+            return False, {
+                "failure_reason": (
+                    f"Missing procurement rules in business_rules.acquisti: "
+                    f"{missing}"
+                )
+            }
+
         cost_str = current_state.get_data_field("costo_stimato", "0")
         try:
             cost = float(cost_str)
         except (ValueError, TypeError):
-            cost = 0.0
-
-        simplified_threshold = (
-            self.agent_config.get("business_rules", {})
-            .get("acquisti", {})
-            .get("soglia_procedura_semplificata", 5000)
-        )
-
-        output_data = {}
-        if cost < simplified_threshold:
-            self.logger.demo(
-                f"  -> Cost ({cost}€) below threshold ({simplified_threshold}€). "
-                f"Simplified procedure."
-            )
-            output_data = {
-                "procedura": "semplificata",
-                "richiede_integrazione": False,
-                "articolo_norma_rif": "art. 50, comma 1 lett. b)",
-                "normativa_rif": "d.lgs. 36/2023",
-                "modalita_acquisto": "Ordine Diretto di Acquisto (OdA) su MEPA",
-                "importo_soglia": simplified_threshold,
+            return False, {
+                "failure_reason": f"Estimated cost '{cost_str}' is not a number."
             }
+
+        threshold = rules["soglia_procedura_semplificata"]
+        if cost < threshold:
+            self.logger.demo(
+                f"  -> Cost ({cost}€) below threshold ({threshold}€)."
+            )
+            procedure = rules["procedura_sotto_soglia"]
         else:
             self.logger.demo(
-                f"  -> Cost ({cost}€) at or above threshold "
-                f"({simplified_threshold}€). Complex procedure."
+                f"  -> Cost ({cost}€) at or above threshold ({threshold}€)."
             )
-            output_data = {
-                "procedura": "complessa",
-                "richiede_integrazione": False,
-                "articolo_norma_rif": "art. 76",
-                "normativa_rif": "d.lgs. 36/2023",
-                "modalita_acquisto": "Procedura Negoziata senza Bando",
-                "importo_soglia": simplified_threshold,
-            }
+            procedure = rules["procedura_sopra_soglia"]
+
+        output_data = {**procedure, "importo_soglia": threshold}
 
         # Merge administrative constants into the output
         constants = self.agent_config.get("administrative_constants", {})

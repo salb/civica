@@ -18,6 +18,7 @@ import os
 import uuid
 
 from rich.logging import RichHandler
+from rich.markup import escape
 
 
 # --- 1. Custom Level Definitions ---
@@ -31,10 +32,20 @@ logging.addLevelName(USER_INFO_LEVEL_NUM, "USER_INFO")
 JSON_DEBUG_LEVEL_NUM = 5
 logging.addLevelName(JSON_DEBUG_LEVEL_NUM, "JSON_DEBUG")
 
-# --- GLOBAL SWITCH ---
-# Set to DEMO_LEVEL_NUM for standard runs, JSON_DEBUG_LEVEL_NUM for full debug.
-GLOBAL_LOG_LEVEL = DEMO_LEVEL_NUM
-# GLOBAL_LOG_LEVEL = JSON_DEBUG_LEVEL_NUM
+# --- TRACE SWITCH ---
+# The event log (*_events.jsonl) is always written: one line per structured
+# event (agent execution, workflow failure), without state snapshots.
+# The trace log (*_trace.jsonl) adds the full state before and after every
+# agent execution. It is written by default, because it is what allows a run
+# to be checked against the rules declared in the configuration. Set the
+# environment variable CIVICA_TRACE_LOG to 0, false, off or no to disable it
+# (for instance when inputs are large and the trace is not needed).
+TRACE_LOG_ENV_VAR = "CIVICA_TRACE_LOG"
+
+
+def trace_log_enabled() -> bool:
+    value = os.environ.get(TRACE_LOG_ENV_VAR, "1").strip().lower()
+    return value not in {"0", "false", "off", "no"}
 
 
 def demo(self, message, *args, **kws):
@@ -85,12 +96,20 @@ class AppLogFilter(logging.Filter):
 
 # --- 3. Specialised JSON Formatters ---
 
+class StructuredEventFilter(logging.Filter):
+    """Lets through only structured events (records carrying an event_type)."""
+
+    def filter(self, record):
+        return hasattr(record, "event_type")
+
+
 class MetricsJSONFormatter(logging.Formatter):
     """
-    Compact formatter for high-level metrics and lifecycle events.
+    Compact formatter for structured events.
 
-    Emits only lightweight fields: cycle, event_type, duration_ms.
-    Suitable for operational dashboards and event-stream analysis.
+    Emits the lightweight fields (cycle, event_type, duration_ms) and, from
+    the payload, the agent, its success flag and the failure reason, but no
+    agent output and no state snapshot. Suitable for aggregating runs.
     """
 
     def format(self, record: logging.LogRecord) -> str:
@@ -104,6 +123,11 @@ class MetricsJSONFormatter(logging.Formatter):
         for key in lightweight_keys:
             if hasattr(record, key):
                 log_object[key] = getattr(record, key)
+        payload = getattr(record, "payload", None)
+        if isinstance(payload, dict):
+            for key in ("agent", "failed_agent", "success", "reason"):
+                if key in payload:
+                    log_object[key] = payload[key]
         return json.dumps(log_object, ensure_ascii=False, default=str)
 
 
@@ -142,12 +166,14 @@ def setup_logging() -> str:
     """
     Initialises the centralised logging system and returns the run ID.
 
-    Configures three handlers:
+    Configures up to three handlers:
     - Console (Rich): DEMO level and above, text shown verbatim
       (Rich markup only on explicit opt-in).
-    - Metrics file (*_events.jsonl): all levels, compact JSON format.
-    - Debug file (*_debug.jsonl): all levels, verbose JSON format.
-      Added only when GLOBAL_LOG_LEVEL is set to JSON_DEBUG_LEVEL_NUM.
+    - Event file (*_events.jsonl): structured events only, compact format.
+      Always written.
+    - Trace file (*_trace.jsonl): every record from Civica's modules, with
+      the full state before and after each agent execution. Written unless
+      CIVICA_TRACE_LOG disables it.
 
     The AppLogFilter is instantiated once and shared across all handlers.
     """
@@ -159,20 +185,20 @@ def setup_logging() -> str:
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     base_filename = f"{timestamp}_{run_id}_workflow"
 
+    # The root level must let structured events (JSON_DEBUG) through: each
+    # handler then decides what it keeps. Before 1.0.2 the root level was
+    # DEMO, so the structured events never reached the files.
     root_logger = logging.getLogger()
-    root_logger.setLevel(GLOBAL_LOG_LEVEL)
+    root_logger.setLevel(JSON_DEBUG_LEVEL_NUM)
     for handler in root_logger.handlers[:]:
         root_logger.removeHandler(handler)
 
     # --- 2. Application filter (shared across all handlers) ---
-    # Instantiated before any handler is added: guarantees that only Civica's
-    # own modules produce output on any channel, excluding third-party libraries
-    # regardless of the active global log level.
+    # Only Civica's own modules produce output on any channel, excluding
+    # third-party libraries (openai, httpx, …).
     app_filter = AppLogFilter()
 
     # --- 3. Console handler (Rich) ---
-    # RichHandler replaces StreamHandler for styled console output.
-    # No explicit Formatter is needed: RichHandler provides its own.
     console_handler = RichHandler(
         rich_tracebacks=True,
         markup=False,
@@ -182,24 +208,24 @@ def setup_logging() -> str:
     console_handler.addFilter(app_filter)
     root_logger.addHandler(console_handler)
 
-    # --- 4. Metrics file handler ---
-    # app_filter already instantiated above — shared without re-instantiating.
-    metrics_log_path = os.path.join(log_dir, f"{base_filename}_events.jsonl")
-    metrics_handler = logging.FileHandler(metrics_log_path, mode="a", encoding="utf-8")
-    metrics_handler.setLevel(JSON_DEBUG_LEVEL_NUM)
-    metrics_handler.setFormatter(MetricsJSONFormatter())
-    metrics_handler.addFilter(app_filter)
-    root_logger.addHandler(metrics_handler)
+    # --- 4. Event file handler (always on) ---
+    events_log_path = os.path.join(log_dir, f"{base_filename}_events.jsonl")
+    events_handler = logging.FileHandler(events_log_path, mode="a", encoding="utf-8")
+    events_handler.setLevel(JSON_DEBUG_LEVEL_NUM)
+    events_handler.setFormatter(MetricsJSONFormatter())
+    events_handler.addFilter(app_filter)
+    events_handler.addFilter(StructuredEventFilter())
+    root_logger.addHandler(events_handler)
 
-    # --- 5. Verbose debug file handler (conditional) ---
-    # Added only when full debug mode is active.
-    if GLOBAL_LOG_LEVEL <= JSON_DEBUG_LEVEL_NUM:
-        debug_log_path = os.path.join(log_dir, f"{base_filename}_debug.jsonl")
-        debug_handler = logging.FileHandler(debug_log_path, mode="a", encoding="utf-8")
-        debug_handler.setLevel(JSON_DEBUG_LEVEL_NUM)
-        debug_handler.setFormatter(VerboseJSONFormatter())
-        debug_handler.addFilter(app_filter)
-        root_logger.addHandler(debug_handler)
+    # --- 5. Trace file handler (on unless disabled) ---
+    trace_log_path = None
+    if trace_log_enabled():
+        trace_log_path = os.path.join(log_dir, f"{base_filename}_trace.jsonl")
+        trace_handler = logging.FileHandler(trace_log_path, mode="a", encoding="utf-8")
+        trace_handler.setLevel(JSON_DEBUG_LEVEL_NUM)
+        trace_handler.setFormatter(VerboseJSONFormatter())
+        trace_handler.addFilter(app_filter)
+        root_logger.addHandler(trace_handler)
 
     # --- 6. Startup messages ---
     logger = logging.getLogger(__name__)
@@ -209,14 +235,16 @@ def setup_logging() -> str:
         extra={"markup": True},
     )
     logger.demo(
-        f"Event log saved to: [cyan]{metrics_log_path}[/cyan]",
+        f"Event log saved to: [cyan]{escape(events_log_path)}[/cyan]",
         extra={"markup": True},
     )
-
-    if GLOBAL_LOG_LEVEL <= JSON_DEBUG_LEVEL_NUM:
+    if trace_log_path:
         logger.demo(
-            f"Full debug log saved to: {debug_log_path}",
+            f"Trace log (state snapshots) saved to: "
+            f"[cyan]{escape(trace_log_path)}[/cyan]",
             extra={"markup": True},
-            )
+        )
+    else:
+        logger.demo(f"Trace log disabled by {TRACE_LOG_ENV_VAR}.")
 
     return run_id

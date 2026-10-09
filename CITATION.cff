@@ -12,8 +12,10 @@ authors:
     affiliation: "Istituto Nazionale di Geofisica e Vulcanologia (INGV)"
     orcid: "https://orcid.org/0000-0001-7965-6667"
 
-version: "1.0.1"
-date-released: 2026-10-07
+version: "1.0.2"
+date-released: 2026-10-09
+
+doi: "10.5281/zenodo.23162104"
 
 repository-code: "https://github.com/salb/civica"
 

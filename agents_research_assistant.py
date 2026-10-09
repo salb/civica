@@ -328,7 +328,22 @@ class CritiqueCategoriserAgent(BaseAgent, OpenAIClientMixin):
             success, out = self._call_llm(
                 system_prompt=prompt, user_prompt="", is_json=True
             )
-            category = out.get("categoria", "sconosciuta") if success else "sconosciuta"
+            if not success:
+                # A failed call is a failure of the workflow, not an
+                # 'unknown' category: the comment would otherwise reach the
+                # strategist with a label nobody assigned.
+                return False, {
+                    "failure_reason": (
+                        f"Categorisation failed for comment "
+                        f"#{comment.get('id')} (reviewer "
+                        f"{comment.get('revisore')}): "
+                        f"{out.get('failure_reason') if isinstance(out, dict) else out}"
+                    )
+                }
+            category = (
+                out.get("categoria", "sconosciuta")
+                if isinstance(out, dict) else "sconosciuta"
+            )
             modified_comment["categoria"] = category
             self.logger.demo(
                 f"  -> Comment #{comment.get('id')} "
@@ -415,13 +430,19 @@ class ResponseStrategistAgent(BaseAgent, OpenAIClientMixin):
                 is_json=False,
             )
 
-            draft = (
-                draft_text_output
-                if success
-                else "[ERROR GENERATING DRAFT RESPONSE]"
-            )
+            if not success:
+                # Before 1.0.2 a placeholder text was inserted and the letter
+                # was saved as if complete. A missing reply now stops the
+                # workflow with a failure envelope.
+                return False, {
+                    "failure_reason": (
+                        f"Draft reply failed for comment #{comment.get('id')} "
+                        f"(reviewer {comment.get('revisore')}): "
+                        f"{draft_text_output.get('failure_reason') if isinstance(draft_text_output, dict) else draft_text_output}"
+                    )
+                }
             modified_comment = comment.copy()
-            modified_comment["bozza_risposta"] = draft
+            modified_comment["bozza_risposta"] = draft_text_output
             self.logger.demo(
                 f"  -> Draft generated for comment #{comment.get('id')} "
                 f"(Rev {comment.get('revisore')})"

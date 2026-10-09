@@ -297,10 +297,10 @@ class AdvancedOrchestrator:
         Supported operators: equals, not_equals, in, exists.
         """
         if not isinstance(rules, list):
-            self.logger.error(
-                "'activate_if' or 'if' value is not a list — check YAML format."
+            raise ValueError(
+                f"Malformed 'activate_if'/'if' condition: expected a list of "
+                f"conditions, got {type(rules).__name__}. Value: {rules}"
             )
-            return False
         for rule in rules:
             # Guards: a malformed condition is a YAML authoring error.
             # Without them, an unknown operator would match no clause below
@@ -346,13 +346,19 @@ class AdvancedOrchestrator:
         if isinstance(task_rule, dict) and "template" in task_rule:
             template_name = task_rule.get("template")
             if not template_name:
-                return ""
+                raise ValueError(
+                    f"Malformed task: 'template' is empty. Rule: {task_rule}"
+                )
 
             all_templates = self.state.as_dict().get("prompt_templates", {})
             template_prompt = all_templates.get(template_name)
             if not template_prompt:
-                self.logger.error(f"Prompt template '{template_name}' not found.")
-                return ""
+                # Without this guard the agent would receive an empty prompt
+                # and the model would answer it.
+                raise ValueError(
+                    f"Malformed task: prompt template '{template_name}' not "
+                    f"found or empty. Available: {sorted(all_templates)}"
+                )
 
             prompt_draft = template_prompt
 
@@ -372,14 +378,13 @@ class AdvancedOrchestrator:
                     else param_config.get("path")
                 )
 
-                # Guard A: path not configured in YAML (key "path" missing)
+                # Guard A: path not configured in YAML (key "path" missing):
+                # an authoring error, not missing data.
                 if value_path is None:
-                    self.logger.error(
-                        f"_resolve_task_input: parameter '{param_name}' has no "
-                        f"'path' configured. Check the YAML. "
-                        f"The placeholder will be replaced with an empty string."
+                    raise ValueError(
+                        f"Malformed task parameter '{param_name}': no 'path' "
+                        f"configured. Parameter: {param_config}"
                     )
-                    value = None
                 else:
                     value = self._get_value_from_path(value_path)
                     # Guard B: path configured but not resolved in the state
@@ -522,6 +527,11 @@ class AdvancedOrchestrator:
                     self._execute_state_updates(action["then"], agent_output)
                 elif not condition_met and "else" in action:
                     self._execute_state_updates(action["else"], agent_output)
+            else:
+                raise ValueError(
+                    f"Malformed 'update_state' action: expected 'assign' or "
+                    f"'if'. Action: {action}"
+                )
 
     def run_iterative_workflow(self):
         """
@@ -544,7 +554,10 @@ class AdvancedOrchestrator:
         for i in range(max_cycles):
             self.state.set_current_cycle(i)
 
-            self.logger.demo(f"\n[bold]--- CYCLE {i+1}/{max_cycles} ---[/bold]")
+            self.logger.demo(
+                f"\n[bold]--- CYCLE {i+1}/{max_cycles} ---[/bold]",
+                extra={"markup": True},
+            )
             self.logger.debug(
                 f"CURRENT STATE: phase='{self.state.get_phase()}', "
                 f"request_type='{self.state.get_request_type()}'"
@@ -558,14 +571,18 @@ class AdvancedOrchestrator:
 
             agents_to_run = []
             for rule in self.router_rules:
-                if "activate_if" in rule and self._evaluate_activation_rules(
-                    rule["activate_if"]
-                ):
+                if "activate_if" not in rule or "agent" not in rule:
+                    raise ValueError(
+                        f"Malformed router rule: 'agent' and 'activate_if' "
+                        f"are required. Rule: {rule}"
+                    )
+                if self._evaluate_activation_rules(rule["activate_if"]):
                     agents_to_run.append(rule)
 
             self.logger.demo(
                 f"🧠 [blue]Router[/blue] activated "
-                f"[bold yellow]{len(agents_to_run)}[/bold yellow] agent(s)."
+                f"[bold yellow]{len(agents_to_run)}[/bold yellow] agent(s).",
+                extra={"markup": True},
             )
             if not agents_to_run:
                 self.logger.demo(
@@ -624,9 +641,10 @@ class AdvancedOrchestrator:
                     task_input = self._resolve_placeholders_recursive(raw_task_input)
 
                 self.logger.demo(
-                    f"  -> Activating '[bold green]{active_rule['agent']}[/bold green]' "
+                    f"  -> Activating '[bold green]{escape(active_rule['agent'])}[/bold green]' "
                     f"with task: '[dim]{escape(str(task_input)[:80])}...[/dim]'",
-                    extra={"markup": True},                )
+                    extra={"markup": True},
+                )
                 self.logger.debug(
                     f"Activating agent '{active_rule['agent']}' "
                     f"with task: {str(task_input)}"
@@ -658,14 +676,16 @@ class AdvancedOrchestrator:
                 duration_ms = (end_time - start_time) * 1000
 
                 if success:
-                    self._log_state_transition(
-                        active_rule, True, output, state_before, duration_ms
-                    )
-
                     if "update_state" in active_rule:
                         self._execute_state_updates(
                             active_rule["update_state"], output
                         )
+
+                    # Logged after the update rules, so that state_after is
+                    # the state the rules produced from this output.
+                    self._log_state_transition(
+                        active_rule, True, output, state_before, duration_ms
+                    )
 
                     self.logger.demo(
                         f"  <- State updated by '{active_rule['agent']}'."

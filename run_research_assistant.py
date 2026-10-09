@@ -31,7 +31,8 @@ def run_research_workflow(
     """
     logger = logging.getLogger(__name__)
     logger.demo(
-        f"\n[bold]--- Starting workflow: [yellow]{workflow_type}[/yellow] ---[/bold]"
+        f"\n[bold]--- Starting workflow: [yellow]{escape(workflow_type)}[/yellow] ---[/bold]",
+        extra={"markup": True},
     )
 
     composite_factory_instance = create_composite_factory(
@@ -50,7 +51,7 @@ def run_research_workflow(
     final_result = orchestrator.run_iterative_workflow()
 
     logger.demo(
-        f"\n[bold]--- Workflow result: [yellow]{workflow_type}[/yellow] ---[/bold]",
+        f"\n[bold]--- Workflow result: [yellow]{escape(workflow_type)}[/yellow] ---[/bold]",
         extra={"markup": True},
     )
     if isinstance(final_result, dict) and final_result.get("status") == "failed":
@@ -59,7 +60,8 @@ def run_research_workflow(
             f"{final_result.get('error')}"
         )
         logger.demo(
-            "[dim]Details available in the JSON event log file.[/dim]"
+            "[dim]Details available in the trace log under logs/.[/dim]",
+            extra={"markup": True},
         )
     elif isinstance(final_result, dict) and "saved_file_path" in final_result:
         logger.demo(
@@ -76,7 +78,8 @@ def run_research_workflow(
         )
         logger.demo(truncated_output)
         logger.demo(
-            "[dim]Full output available in the JSON event log file.[/dim]"
+            "[dim]Full output available in the trace log under logs/.[/dim]",
+            extra={"markup": True},
         )
     else:
         # Fallback for other output types (e.g. error dicts from the debugger)
@@ -135,7 +138,8 @@ def main():
 
             logger.demo(
                 f"Triage decision: launching workflow "
-                f"'[bold cyan]{workflow_type}[/bold cyan]'."
+                f"'[bold cyan]{escape(str(workflow_type))}[/bold cyan]'.",
+                extra={"markup": True},
             )
 
             workflow_config = main_config.get("workflows", {}).get(workflow_type)
