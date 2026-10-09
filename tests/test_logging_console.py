@@ -64,3 +64,16 @@ def test_lo_stile_resta_disponibile_su_richiesta(console):
     uscita = console.getvalue()
     assert "Avvio" in uscita
     assert "[bold]" not in uscita
+
+
+def test_i_messaggi_del_programma_non_mostrano_i_tag(console, percorso_config):
+    # Con markup=False i messaggi del programma che usano gli stili
+    # devono chiederli esplicitamente, altrimenti i tag compaiono nel testo.
+    from orchestrator import AdvancedOrchestrator
+    orch = AdvancedOrchestrator(percorso_config("config_procurement.yaml"), agent_factory=None)
+    orch.state.set_phase("fase_inesistente")
+    orch.run_iterative_workflow()
+    uscita = console.getvalue()
+    assert "CYCLE 1/" in uscita and "Router" in uscita
+    for tag in ("[bold]", "[/bold]", "[blue]", "[bold yellow]"):
+        assert tag not in uscita

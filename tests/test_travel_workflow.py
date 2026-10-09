@@ -111,3 +111,26 @@ def test_il_timesheet_ha_la_sua_descrizione_arricchita(esegui_missione):
 def test_ogni_forma_di_si_produce_il_timesheet(esegui_missione, risposta):
     risultato = esegui_missione(risposta)["risultato"]
     assert isinstance(risultato, list) and len(risultato) == 2
+
+
+# --- Il ramo timesheet lo decide l'utente, mai il modello ---
+def test_se_il_modello_estrae_il_flag_la_domanda_viene_posta_lo_stesso(
+        config_principale, percorso_config, monkeypatch):
+    # Il prompt chiede di lasciare timesheet_richiesto a null, ma un modello
+    # può non obbedire. Prima della 1.0.2 un "true" estratto saltava la
+    # domanda e generava il timesheet.
+    domande = []
+    monkeypatch.setattr("builtins.input", lambda d: domande.append(d) or "no")
+    factory = create_composite_factory(get_agent_instance, logging.getLogger("test"))
+    orchestrator = AdvancedOrchestrator(percorso_config("config_travel.yaml"), factory, config_principale)
+    orchestrator.state.set_request_type("richiesta_missione")
+    orchestrator.state.set_global_variable("user_request", "richiesta finta")
+    orchestrator.state.set_global_variable("current_date", "2026-09-30")
+    estrazione = {**ESTRAZIONE_FINTA, "timesheet_richiesto": True}
+
+    with patch.object(DataExtractorAgent, "_call_llm", return_value=(True, estrazione)), \
+         patch.object(SemanticEnrichmentAgent, "_call_llm", side_effect=ARRICCHIMENTI_FINTI):
+        risultato = orchestrator.run_iterative_workflow()
+
+    assert len(domande) == 1 and "timesheet" in domande[0]
+    assert list(risultato) == ["missione"]
